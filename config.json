@@ -1,0 +1,31 @@
+{
+  "llm": {
+    "provider_name": "local",
+    "api_key": "sk-none",
+    "base_url": "http://127.0.0.1:8080/v1",
+    "model": "Hermes-3-8B",
+    "vision_enabled": true
+  },
+  "obsidian": {
+    "api_key": "PASTE_YOUR_API_KEY_HERE",
+    "url": "https://127.0.0.1:27124"
+  },
+  "voice": {
+    "tts_engine": "online",
+    "whisper_model": "~/.local/share/mofakir/models/ggml-small.bin",
+    "tts_local_models": {
+      "en": "~/.local/share/mofakir/models/en_US-lessac-medium.onnx",
+      "ar": "~/.local/share/mofakir/models/ar_JO-kareem-medium.onnx",
+      "fr": "~/.local/share/mofakir/models/fr_FR-upmc-medium.onnx",
+      "es": "~/.local/share/mofakir/models/es_ES-sharvard-medium.onnx",
+      "de": "~/.local/share/mofakir/models/de_DE-thorsten-medium.onnx"
+    },
+    "tts_online_voices": {
+      "en": "en-US-GuyNeural",
+      "ar": "ar-EG-ShakirNeural",
+      "fr": "fr-FR-HenriNeural",
+      "es": "es-ES-AlvaroNeural",
+      "de": "de-DE-KillianNeural"
+    }
+  }
+}
