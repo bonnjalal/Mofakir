@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 set -e
 
-# Colors for terminal output
 GREEN='\033[1;32m'
 BLUE='\033[1;34m'
 YELLOW='\033[1;33m'
 RED='\033[1;31m'
-NC='\033[0m' # No Color
+NC='\033[0m' 
+USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${BLUE}==========================================${NC}"
 echo -e "${BLUE}    🤖 Installing Mofakir AI Assistant    ${NC}"
 echo -e "${BLUE}==========================================${NC}"
 
 if [ "$EUID" -eq 0 ]; then
-  echo -e "${RED}Please do NOT run this script as root. Run as your normal user.${NC}"
-  echo -e "The script will ask for sudo password when installing system packages."
+  echo -e "${RED}Please do NOT run this script as root.${NC}"
   exit 1
 fi
 
-# Define Standard Paths
 SHARE_DIR="$HOME/.local/share/mofakir"
 BIN_DIR="$SHARE_DIR/bin"
 MODELS_DIR="$SHARE_DIR/models"
@@ -28,188 +28,192 @@ LOCAL_BIN="$HOME/.local/bin"
 
 mkdir -p "$BIN_DIR" "$MODELS_DIR" "$SOUNDS_DIR" "$LOCAL_BIN"
 
-# ==========================================
-# 1. OS DETECTION & SYSTEM PACKAGES
-# ==========================================
 echo -e "\n${YELLOW}[1/6] Detecting OS and installing system dependencies...${NC}"
-
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-    OS_LIKE=$ID_LIKE
-else
-    echo -e "${RED}Cannot detect OS. /etc/os-release is missing.${NC}"
-    exit 1
-fi
+if [ -f /etc/os-release ]; then . /etc/os-release; OS=$ID; OS_LIKE=$ID_LIKE; else exit 1; fi
 
 if [[ "$OS" == "arch" || "$OS_LIKE" == *"arch"* ]]; then
-    echo -e "Arch Linux detected. Using pacman..."
-    sudo pacman -Syu --needed --noconfirm sox jq wl-clipboard grim playerctl tk python python-virtualenv wget curl base-devel git
+    sudo pacman -Syu --needed --noconfirm sox jq wl-clipboard grim playerctl python python-virtualenv wget curl base-devel git xclip maim xdotool wmctrl cmake xcb-util-cursor
 elif [[ "$OS" == "ubuntu" || "$OS" == "debian" || "$OS_LIKE" == *"debian"* || "$OS_LIKE" == *"ubuntu"* ]]; then
-    echo -e "Debian/Ubuntu detected. Using apt..."
     sudo apt-get update
-    sudo apt-get install -y sox libsox-fmt-all jq wl-clipboard grim playerctl python3-tk python3-venv wget curl build-essential git
-else
-    echo -e "${RED}Unsupported OS for automated dependencies: $OS${NC}"
-    echo -e "Please ensure you have: sox, jq, wl-clipboard, grim, playerctl, python3-tk, python3-venv, build-essential"
+    sudo apt-get install -y sox libsox-fmt-all jq wl-clipboard grim playerctl python3-venv wget curl build-essential git xclip maim xdotool wmctrl cmake libxcb-cursor0
 fi
 
-# ==========================================
-# 2. PYTHON VIRTUAL ENVIRONMENT
-# ==========================================
 echo -e "\n${YELLOW}[2/6] Setting up isolated Python environment...${NC}"
-if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-fi
-
-echo "Installing Python packages (OpenAI, Edge-TTS, DDG, LangDetect)..."
+if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
 "$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install openai duckduckgo-search requests beautifulsoup4 edge-tts langdetect
+"$VENV_DIR/bin/pip" install openai ddgs requests beautifulsoup4 edge-tts langdetect PyQt6
 
-# ==========================================
-# 3. WHISPER.CPP & PIPER TTS BINARIES
-# ==========================================
 echo -e "\n${YELLOW}[3/6] Setting up AI Audio Binaries...${NC}"
-
-# Compile whisper.cpp if not present
-if [ ! -f "$BIN_DIR/whisper-cli" ]; then
-    echo "Compiling whisper.cpp from source (this is fast)..."
+if [ ! -f "$BIN_DIR/whisper-cli" ] || (command -v ldd >/dev/null && ldd "$BIN_DIR/whisper-cli" 2>&1 | grep -q "not found"); then
+    echo "Rebuilding/repairing whisper-cli..."
     rm -rf /tmp/whisper_build
     git clone https://github.com/ggerganov/whisper.cpp.git /tmp/whisper_build
     cd /tmp/whisper_build
-    make -j$(nproc)
-    cp main "$BIN_DIR/whisper-cli"
-    cd - > /dev/null
-    rm -rf /tmp/whisper_build
-else
-    echo "whisper-cli already installed."
-fi
-
-# Download Piper TTS if not present
-if [ ! -f "$BIN_DIR/piper" ]; then
-    echo "Downloading Piper TTS..."
-    ARCH=$(uname -m)
-    if [ "$ARCH" == "x86_64" ]; then
-        wget -q --show-progress -O /tmp/piper.tar.gz "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz"
-        tar -xzf /tmp/piper.tar.gz -C /tmp/
-        cp -r /tmp/piper/* "$BIN_DIR/"
-        rm -rf /tmp/piper.tar.gz /tmp/piper
+    
+    cmake -B build -DBUILD_SHARED_LIBS=OFF
+    cmake --build build --config Release -j$(nproc) || true
+    
+    WHISPER_BIN=$(find . -type f \( -name "whisper-cli" -o -name "main" \) -executable | head -n 1)
+    
+    if [ -n "$WHISPER_BIN" ]; then
+        cp "$WHISPER_BIN" "$BIN_DIR/whisper-cli"
     else
-        echo -e "${RED}Automated Piper install only supports x86_64. Please compile Piper manually for $ARCH.${NC}"
+        echo -e "${RED}FATAL ERROR: Failed to find compiled whisper binary! Installation aborted.${NC}"
+        exit 1
     fi
-else
-    echo "piper already installed."
+    
+    cd "$REPO_DIR"
+    rm -rf /tmp/whisper_build
 fi
 
-# ==========================================
-# 4. DOWNLOADING AI MODELS (MULTI-LINGUAL)
-# ==========================================
-echo -e "\n${YELLOW}[4/6] Downloading Local AI Models...${NC}"
+if [ ! -f "$BIN_DIR/piper" ]; then
+    if [ "$(uname -m)" == "x86_64" ]; then
+        echo "Downloading Piper TTS Binary..."
+        rm -f /tmp/piper.tar.gz
+        
+        PIPER_URL="https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz"
+        DOWNLOAD_SUCCESS=false
+        
+        MIRRORS=(
+            "$PIPER_URL"
+            "https://ghp.ci/$PIPER_URL"
+            "https://ghfast.top/$PIPER_URL"
+            "https://mirror.ghproxy.com/$PIPER_URL"
+        )
+        
+        for url in "${MIRRORS[@]}"; do
+            echo "Attempting download from: $url"
+            if wget -c --tries=3 -U "$USER_AGENT" -q --show-progress -O /tmp/piper.tar.gz "$url"; then
+                DOWNLOAD_SUCCESS=true
+                break
+            fi
+        done
+        
+        if [ "$DOWNLOAD_SUCCESS" = true ] && [ -s /tmp/piper.tar.gz ]; then
+            tar -xzf /tmp/piper.tar.gz -C /tmp/
+            cp -r /tmp/piper/* "$BIN_DIR/"
+            rm -rf /tmp/piper.tar.gz /tmp/piper
+        else
+            echo -e "${RED}FATAL ERROR: Failed to download Piper TTS. Installation aborted.${NC}"
+            rm -f /tmp/piper.tar.gz
+            exit 1
+        fi
+    fi
+fi
 
+echo -e "\n${YELLOW}[4/6] Downloading Local AI Models...${NC}"
 cd "$MODELS_DIR"
 
-if [ ! -f "ggml-small.bin" ]; then
-    echo "Downloading Whisper Small model (~240MB)..."
-    wget -q --show-progress -O ggml-small.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+needs_download=true
+if [ -f "ggml-small.bin" ]; then
+    filesize=$(stat -c%s "ggml-small.bin" 2>/dev/null || wc -c < "ggml-small.bin")
+    if [ "$filesize" -ge 200000000 ]; then needs_download=false; fi
 fi
 
-echo -e "\n${BLUE}Which Local TTS Languages would you like to install?${NC}"
-echo "1) English (US)"
-echo "2) Arabic (JO)"
-echo "3) French (FR)"
-echo "4) Spanish (ES)"
-echo "5) German (DE)"
-echo -n "Enter numbers separated by space (default: 1 2): "
-read -r lang_choices
-if [ -z "$lang_choices" ]; then lang_choices="1 2"; fi
+if [ "$needs_download" = true ]; then 
+    echo "Downloading Whisper Small (Q8 Quantized) model (~250MB)..."
+    WHISPER_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin"
+    HF_MIRROR="https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin"
+    
+    if ! wget -c --tries=3 -U "$USER_AGENT" -q --show-progress -O ggml-small.bin "$WHISPER_URL"; then
+        echo "Official link failed, trying HF-Mirror..."
+        if ! wget -c --tries=3 -U "$USER_AGENT" -q --show-progress -O ggml-small.bin "$HF_MIRROR"; then
+            echo -e "${RED}FATAL ERROR: Failed to download Whisper model. Installation aborted.${NC}"
+            exit 1
+        fi
+    fi
+fi
 
 dl_piper() {
-    local lang=$1
-    local region=$2
-    local voice=$3
-    local quality=$4
-    local model="${region}-${voice}-${quality}.onnx"
-    local url="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/${lang}/${region}/${voice}/${quality}/${model}"
-    
-    if [ ! -f "$model" ]; then
-        echo "Downloading $model..."
-        wget -q --show-progress -O "$model" "$url"
-        wget -q -O "${model}.json" "${url}.json"
-    else
-        echo "$model already installed."
+    if [ ! -f "$5.onnx" ]; then
+        echo "  -> Downloading TTS Voice: $5..."
+        
+        local url1="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/$1/$2/$3/$4/$5.onnx"
+        local url2="https://hf-mirror.com/rhasspy/piper-voices/resolve/v1.0.0/$1/$2/$3/$4/$5.onnx"
+        
+        if ! wget -c --tries=3 -U "$USER_AGENT" -q --show-progress -O "$5.onnx" "$url1"; then
+            if ! wget -c --tries=3 -U "$USER_AGENT" -q --show-progress -O "$5.onnx" "$url2"; then
+                echo -e "${RED}FATAL ERROR: Failed to download TTS voice model $5.onnx.${NC}"
+                exit 1
+            fi
+        fi
+        
+        local json1="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/$1/$2/$3/$4/$5.onnx.json"
+        local json2="https://hf-mirror.com/rhasspy/piper-voices/resolve/v1.0.0/$1/$2/$3/$4/$5.onnx.json"
+        
+        if ! wget -c --tries=3 -U "$USER_AGENT" -q -O "$5.onnx.json" "$json1"; then
+            if ! wget -c --tries=3 -U "$USER_AGENT" -q -O "$5.onnx.json" "$json2"; then
+                echo -e "${RED}FATAL ERROR: Failed to download TTS voice JSON $5.onnx.json.${NC}"
+                exit 1
+            fi
+        fi
     fi
 }
 
-for choice in $lang_choices; do
-    case $choice in
-        1) dl_piper "en" "en_US" "lessac" "medium" ;;
-        2) dl_piper "ar" "ar_JO" "kareem" "medium" ;;
-        3) dl_piper "fr" "fr_FR" "upmc" "medium" ;;
-        4) dl_piper "es" "es_ES" "sharvard" "medium" ;;
-        5) dl_piper "de" "de_DE" "thorsten" "medium" ;;
-        *) echo "Skipping unknown choice: $choice" ;;
+echo -e "\n${BLUE}Select TTS languages to install for offline voice synthesis:${NC}"
+echo "  en - English (Default)    de - German         ru - Russian"
+echo "  ar - Arabic               it - Italian        zh - Chinese"
+echo "  fr - French               ja - Japanese       es - Spanish"
+echo "  pt - Portuguese           all - Install all"
+
+# Use tty redirection to read input safely in headless or pipeline environments
+read -p "Enter languages separated by space (default: en): " selected_langs </dev/tty || selected_langs="en"
+
+if [ -z "$selected_langs" ]; then selected_langs="en"; fi
+if [[ "$selected_langs" == *"all"* ]]; then selected_langs="en ar fr es de it ja pt ru zh"; fi
+
+for lang in $selected_langs; do
+    case $lang in
+        en) dl_piper "en" "en_US" "lessac" "medium" "en_US-lessac-medium" ;;
+        ar) dl_piper "ar" "ar_JO" "kareem" "medium" "ar_JO-kareem-medium" ;;
+        fr) dl_piper "fr" "fr_FR" "upmc" "medium" "fr_FR-upmc-medium" ;;
+        es) dl_piper "es" "es_ES" "sharvard" "medium" "es_ES-sharvard-medium" ;;
+        de) dl_piper "de" "de_DE" "thorsten" "medium" "de_DE-thorsten-medium" ;;
+        it) dl_piper "it" "it_IT" "riccardo" "xlow" "it_IT-riccardo-xlow" ;;
+        ja) dl_piper "ja" "ja_JP" "dani" "low" "ja_JP-dani-low" ;;
+        pt) dl_piper "pt" "pt_PT" "tugao" "medium" "pt_PT-tugao-medium" ;;
+        ru) dl_piper "ru" "ru_RU" "denis" "medium" "ru_RU-denis-medium" ;;
+        zh) dl_piper "zh" "zh_CN" "huashan" "medium" "zh_CN-huashan-medium" ;;
+        *) echo -e "${YELLOW}Warning: Unknown language code '$lang', skipping.${NC}" ;;
     esac
 done
-cd - > /dev/null
 
-# ==========================================
-# 5. SYNTHESIZING SOUNDS & COPYING SCRIPTS
-# ==========================================
+# Force return to repository directory before starting the copy actions
+cd "$REPO_DIR"
+
 echo -e "\n${YELLOW}[5/6] Finalizing assets and scripts...${NC}"
 
-# Synthesize basic beep sounds so we don't need external WAV files!
-if [ ! -f "$SOUNDS_DIR/start.wav" ]; then
-    sox -n "$SOUNDS_DIR/start.wav" synth 0.1 sine 800 vol 0.5
-fi
-if [ ! -f "$SOUNDS_DIR/stop.wav" ]; then
-    sox -n "$SOUNDS_DIR/stop.wav" synth 0.15 sine 400 vol 0.5
-fi
-
-# Copy core scripts to the share directory
-if [ -f "src/mofakir.sh" ] && [ -f "src/mofakir-gui.py" ]; then
-    cp src/mofakir.sh "$SHARE_DIR/mofakir.sh"
-    cp src/mofakir-gui.py "$SHARE_DIR/mofakir-gui.py"
-    chmod +x "$SHARE_DIR/mofakir.sh" "$SHARE_DIR/mofakir-gui.py"
-elif [ -f "mofakir.sh" ] && [ -f "mofakir-gui.py" ]; then
-    cp mofakir.sh "$SHARE_DIR/mofakir.sh"
-    cp mofakir-gui.py "$SHARE_DIR/mofakir-gui.py"
-    chmod +x "$SHARE_DIR/mofakir.sh" "$SHARE_DIR/mofakir-gui.py"
+# Ensure default assets exist and are copied over safely
+if [ -d "$REPO_DIR/sounds" ] && [ "$(ls -A "$REPO_DIR/sounds" 2>/dev/null)" ]; then 
+    cp "$REPO_DIR/sounds"/* "$SOUNDS_DIR/"
 else
-    echo -e "${RED}Error: Could not find mofakir.sh and mofakir-gui.py in the current directory.${NC}"
-    exit 1
+    echo "Generating default UI sounds using sox..."
+    sox -n "$SOUNDS_DIR/start.wav" synth 0.1 sine 800 vol 0.5 || true
+    sox -n "$SOUNDS_DIR/stop.wav" synth 0.15 sine 400 vol 0.5 || true
 fi
 
-# ==========================================
-# 6. CREATING EXECUTABLE WRAPPERS
-# ==========================================
-echo -e "\n${YELLOW}[6/6] Creating executable wrappers in ~/.local/bin...${NC}"
+mkdir -p "$HOME/.config/mofakir"
+if [ ! -f "$HOME/.config/mofakir/config.json" ] && [ -f "$REPO_DIR/config.json" ]; then 
+    cp "$REPO_DIR/config.json" "$HOME/.config/mofakir/config.json"
+fi
 
-# Mofakir Orchestrator Wrapper
+# Critical copies (any failure here will exit with error)
+cp "$REPO_DIR/trigger.sh" "$SHARE_DIR/mofakir.sh"
+cp "$REPO_DIR/src/mofakir-gui.py" "$SHARE_DIR/mofakir-gui.py"
+cp "$REPO_DIR/src/ui.qml" "$SHARE_DIR/ui.qml"
+chmod +x "$SHARE_DIR/mofakir.sh" "$SHARE_DIR/mofakir-gui.py"
+
+echo -e "\n${YELLOW}[6/6] Creating executable wrappers in ~/.local/bin...${NC}"
 cat << EOF > "$LOCAL_BIN/mofakir"
 #!/usr/bin/env bash
-# Inject our isolated binaries and python venv into the PATH
 export PATH="$BIN_DIR:$VENV_DIR/bin:\$PATH"
 exec "$SHARE_DIR/mofakir.sh" "\$@"
 EOF
-
-# Mofakir GUI Wrapper
 cat << EOF > "$LOCAL_BIN/mofakir-gui"
 #!/usr/bin/env bash
-# Inject our isolated binaries and python venv into the PATH
 export PATH="$BIN_DIR:$VENV_DIR/bin:\$PATH"
 exec "$VENV_DIR/bin/python3" "$SHARE_DIR/mofakir-gui.py" "\$@"
 EOF
-
 chmod +x "$LOCAL_BIN/mofakir" "$LOCAL_BIN/mofakir-gui"
 
-# ==========================================
-# DONE
-# ==========================================
-echo -e "\n${GREEN}==========================================${NC}"
-echo -e "${GREEN}        🎉 INSTALLATION COMPLETE 🎉       ${NC}"
-echo -e "${GREEN}==========================================${NC}"
-echo -e "Mofakir is installed to ${BLUE}~/.local/bin/mofakir${NC}"
-echo -e "\nMake sure ${YELLOW}~/.local/bin${NC} is in your system PATH."
-echo -e "To configure Mofakir, simply run it for the first time:"
-echo -e "  ${BLUE}mofakir --voice${NC}"
-echo -e "This will generate your config file at ~/.config/mofakir/config.json\n"
+echo -e "\n${GREEN}        🎉 INSTALLATION COMPLETE 🎉       ${NC}"
