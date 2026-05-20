@@ -10,11 +10,7 @@ It can see your screen, read your copied text or binary clipboard assets, organi
 
 Deploying Mofakir on your workspace unlocks completely hands-free desktop control. Watch the agentic assistant manage system utilities, analyze code, and interact with desktop workspaces in real time:
 
-<p align="center">
-  <video src="assets/mofakir_demo.mp4" width="100%" controls>
-    Your browser does not support the video tag. You can view the demonstration video directly in the <code>assets/</code> folder.
-  </video>
-</p>
+[![Mofakir Demo](assets/poster.png)](assets/mofakir_demo.mp4)
 
 ---
 
